@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'/>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'/>
+<title>CrashAid – Live Tracking</title>
+<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
+<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+<script src='https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js'></script>
+<script src='https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js'></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, Arial, sans-serif; background: #0d0d1a; color: #fff; height: 100vh; overflow: hidden; }
+
+  #map { width: 100vw; height: 100vh; }
+
+  /* ── top bar ── */
+  #topbar {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(10,10,26,0.88); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 16px;
+    padding: 10px 18px; z-index: 1000; display: flex; align-items: center;
+    gap: 12px; min-width: 240px; max-width: 92vw; white-space: nowrap;
+  }
+  #sos-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #ff3b3b; flex-shrink: 0;
+    box-shadow: 0 0 0 0 rgba(255,59,59,0.6);
+    animation: pulse-ring 1.4s ease-out infinite;
+  }
+  #sos-dot.inactive { background: #888; box-shadow: none; animation: none; }
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0   rgba(255,59,59,0.6); }
+    70%  { box-shadow: 0 0 0 10px rgba(255,59,59,0); }
+    100% { box-shadow: 0 0 0 0   rgba(255,59,59,0); }
+  }
+  #bar-name { font-weight: 700; font-size: 14px; color: #fff; }
+  #bar-status { font-size: 12px; color: #00c851; font-weight: 600; }
+  #bar-status.offline  { color: #888; }
+  #bar-status.expired  { color: #ff8c3b; }
+  #bar-status.waiting  { color: #f0c040; }
+
+  /* ── stats pills (top-left) ── */
+  #stats-row {
+    position: fixed; top: 80px; left: 12px;
+    display: flex; gap: 6px; z-index: 1000;
+    max-width: calc(100vw - 24px); flex-wrap: wrap;
+  }
+  .stat-pill {
+    background: rgba(10,10,26,0.85); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.10); border-radius: 10px;
+    padding: 6px 12px; font-size: 12px; color: #ccc;
+    display: none;
+  }
+  .stat-pill.show { display: block; }
+  .stat-pill strong { color: #fff; }
+
+  /* ── path legend ── */
+  #legend {
+    position: fixed; top: 80px; right: 12px;
+    background: rgba(10,10,26,0.85); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.10); border-radius: 12px;
+    padding: 10px 14px; z-index: 1000; font-size: 12px; line-height: 1.8;
+    display: none;
+  }
+  #legend.show { display: block; }
+  .leg-row { display: flex; align-items: center; gap: 8px; color: #ccc; }
+  .leg-dot  { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ── bottom info card ── */
+  #infocard {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(10,10,26,0.92); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
+    padding: 14px 18px; z-index: 1000;
+    width: calc(100vw - 24px); max-width: 480px;
+  }
+
+  /* user row */
+  .user-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  }
+  #avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: rgba(255,59,59,0.18);
+    border: 1.5px solid rgba(255,59,59,0.4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #ff3b3b;
+    flex-shrink: 0;
+  }
+  #user-name { font-size: 14px; font-weight: 600; color: #fff; }
+  #user-sub  { font-size: 11px; color: rgba(255,255,255,0.4); }
+  #expiry-badge {
+    margin-left: auto;
+    padding: 4px 9px; border-radius: 8px; font-size: 11px; font-weight: 600;
+    background: rgba(0,200,81,0.12);
+    border: 1px solid rgba(0,200,81,0.3);
+    color: #00c851; white-space: nowrap; flex-shrink: 0;
+  }
+  #expiry-badge.orange {
+    background: rgba(255,140,59,0.12);
+    border-color: rgba(255,140,59,0.3);
+    color: #ff8c3b;
+  }
+
+  /* metrics grid */
+  .metrics-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px; margin-bottom: 10px;
+  }
+  .metric {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px; padding: 8px 10px;
+  }
+  .metric-label { font-size: 10px; color: rgba(255,255,255,0.38); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .metric-value { font-size: 13px; font-weight: 600; color: #fff; }
+  .metric-value.green  { color: #00c851; }
+  .metric-value.amber  { color: #ff8c3b; }
+  .metric-value.red    { color: #ff3b3b; }
+
+  /* coords row */
+  #coords-row {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px; padding: 8px 12px; margin-bottom: 12px;
+    min-width: 0;
+  }
+  #ic-coords {
+    font-size: 11px; color: #aaa; font-family: monospace; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  #copy-btn {
+    background: rgba(255,255,255,0.07); border: none; border-radius: 6px;
+    padding: 3px 8px; cursor: pointer; color: rgba(255,255,255,0.5);
+    font-size: 11px; display: flex; align-items: center; gap: 4px;
+    flex-shrink: 0;
+  }
+  #copy-btn:hover { background: rgba(255,255,255,0.14); }
+
+  .btn-row { display: flex; gap: 8px; }
+  #open-maps-btn {
+    flex: 1; padding: 10px; border: none;
+    background: #ff3b3b; color: #fff; border-radius: 12px;
+    font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  #open-maps-btn:hover { background: #e02020; }
+  #open-maps-btn:disabled { background: #444; cursor: default; }
+  #fit-btn, #share-btn {
+    width: 42px; height: 42px; border: 1px solid rgba(255,255,255,0.2);
+    background: transparent; color: #fff; border-radius: 12px;
+    font-size: 16px; cursor: pointer; display: flex;
+    align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  #fit-btn:hover, #share-btn:hover { background: rgba(255,255,255,0.08); }
+
+  /* ── error overlay ── */
+  #overlay {
+    display: none; position: fixed; inset: 0; background: #0d0d1a;
+    z-index: 2000; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px; padding: 32px; text-align: center;
+  }
+  #overlay.show { display: flex; }
+  #overlay .big { font-size: 48px; }
+  #overlay h2  { font-size: 20px; color: #fff; }
+  #overlay p   { font-size: 14px; color: #888; max-width: 280px; line-height: 1.5; }
+
+  /* ── path truncated notice ── */
+  #trunc-notice {
+    position: fixed; bottom: 230px; left: 50%; transform: translateX(-50%);
+    background: rgba(255,140,59,0.15); border: 1px solid rgba(255,140,59,0.4);
+    border-radius: 10px; padding: 6px 14px; z-index: 1000;
+    font-size: 11px; color: #ff8c3b; display: none;
+    white-space: nowrap; max-width: calc(100vw - 24px);
+    text-align: center;
+  }
+  #trunc-notice.show { display: block; }
+
+  /* snackbar */
+  #snackbar {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 8px 18px; border-radius: 10px;
+    font-size: 13px; z-index: 3000; opacity: 0; transition: opacity 0.3s;
+    pointer-events: none; white-space: nowrap;
+    max-width: calc(100vw - 24px); text-align: center;
+  }
+  #snackbar.show { opacity: 1; }
+
+  /* ── Mobile responsive tweaks ── */
+  @media (max-width: 480px) {
+    /* Topbar: shrink text slightly on very small screens */
+    #topbar {
+      top: 8px;
+      padding: 8px 14px;
+      gap: 8px;
+      min-width: 0;
+    }
+    #bar-name { font-size: 13px; }
+    #bar-status { font-size: 11px; }
+
+    /* Stats pills: sit closer to topbar */
+    #stats-row { top: 70px; }
+
+    /* Legend: hide on small screens to avoid overlap with stats pills */
+    #legend.show { display: none; }
+
+    /* Infocard: stick to bottom edges, remove side gaps */
+    #infocard {
+      bottom: 0;
+      left: 0;
+      right: 0;
+      transform: none;
+      width: 100%;
+      max-width: 100%;
+      border-radius: 20px 20px 0 0;
+      padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+    }
+
+    /* Metrics: slightly smaller text */
+    .metric-label { font-size: 9px; }
+    .metric-value { font-size: 12px; }
+    .metric { padding: 7px 8px; }
+
+    /* User name truncation */
+    #user-name { 
+      font-size: 13px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 120px;
+    }
+
+    /* Truncated notice sits above infocard */
+    #trunc-notice { bottom: 200px; font-size: 10px; padding: 5px 10px; }
+
+    /* Snackbar above infocard */
+    #snackbar { bottom: 200px; }
+
+    /* Open maps button text shorter */
+    #open-maps-btn { font-size: 12px; padding: 10px 6px; }
+  }
+
+  @media (max-width: 360px) {
+    /* Extra small screens: stack metrics 2-col */
+    .metrics-grid { grid-template-columns: 1fr 1fr; }
+    .metric:last-child { grid-column: span 2; }
+
+    #bar-name { font-size: 12px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+  }
+</style>
+</head>
+<body>
+
+<div id='map'></div>
+
+<div id='topbar'>
+  <div id='sos-dot'></div>
+  <div>
+    <div id='bar-name'>CrashAid</div>
+    <div id='bar-status'>Connecting…</div>
+  </div>
+</div>
+
+<!-- Stats pills top-left -->
+<div id='stats-row'>
+  <div class='stat-pill' id='dist-pill'>📏 <strong id='dist-val'>–</strong></div>
+  <div class='stat-pill' id='elapsed-pill'>🕐 <strong id='elapsed-val'>–</strong></div>
+</div>
+
+<!-- Path truncated notice -->
+<div id='trunc-notice'>⚠️ Path truncated — only the last 1000 points are shown</div>
+
+<!-- Legend top-right -->
+<div id='legend'>
+  <div class='leg-row'><div class='leg-dot' style='background:#00c851'></div> Start</div>
+  <div class='leg-row'><div class='leg-dot' style='background:#ff3b3b'></div> Current / End</div>
+  <div class='leg-row'><div style='width:24px;height:3px;background:#ff3b3b;opacity:0.7;border-radius:2px'></div> Path</div>
+</div>
+
+<div id='infocard'>
+  <!-- User row -->
+  <div class='user-row'>
+    <div id='avatar'>CA</div>
+    <div>
+      <div id='user-name'>CrashAid User</div>
+      <div id='user-sub'>Updated –</div>
+    </div>
+    <div id='expiry-badge'>–</div>
+  </div>
+
+  <!-- Metrics grid: Accuracy · Speed · Points -->
+  <div class='metrics-grid'>
+    <div class='metric'>
+      <div class='metric-label'>Accuracy</div>
+      <div class='metric-value' id='ic-accuracy'>–</div>
+    </div>
+    <div class='metric'>
+      <div class='metric-label'>Speed</div>
+      <div class='metric-value' id='ic-speed'>–</div>
+    </div>
+    <div class='metric'>
+      <div class='metric-label'>Points</div>
+      <div class='metric-value' id='ic-points'>–</div>
+    </div>
+  </div>
+
+  <!-- Coords row with copy -->
+  <div id='coords-row'>
+    📍 <span id='ic-coords'>–</span>
+    <button id='copy-btn'>⎘ Copy</button>
+  </div>
+
+  <!-- Action buttons -->
+  <div class='btn-row'>
+    <button id='open-maps-btn' disabled>🗺 Open in Maps</button>
+    <button id='fit-btn' title='Fit path'>⛶</button>
+    <button id='share-btn' title='Share link'>🔗</button>
+  </div>
+</div>
+
+<div id='overlay'>
+  <div class='big'>🚨</div>
+  <h2 id='overlay-title'>No session found</h2>
+  <p id='overlay-msg'>This tracking link is invalid or has expired. Please ask the person to share a new link.</p>
+</div>
+
+<div id='snackbar'></div>
+
+<script>
+// ── Firebase init ──────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: 'AIzaSyAAIfk0eoMIBZIAKrOhYff1tn0RP0pxU-I',
+  authDomain: 'crashaid-a1d3c.firebaseapp.com',
+  databaseURL: 'https://crashaid-a1d3c-default-rtdb.firebaseio.com',
+  projectId: 'crashaid-a1d3c',
+  storageBucket: 'crashaid-a1d3c.firebasestorage.app',
+  messagingSenderId: '459396175528',
+  appId: '1:459396175528:web:83031288b9daacb17b149d'
+};
+firebase.initializeApp(firebaseConfig);
+
+// ── Map init ───────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true }).setView([17.3850, 78.4867], 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 19
+}).addTo(map);
+
+// ── Icons ──────────────────────────────────────────────────────────────────
+// CSS-only icons — emoji inside Leaflet divIcon is unreliable on Android
+// WebView and iOS Safari private mode, so we use plain text labels instead.
+const sosIcon = L.divIcon({
+  html: '<div style="width:40px;height:40px;border-radius:50%;background:#ff3b3b;border:3px solid #fff;box-shadow:0 0 0 5px rgba(255,59,59,0.4),0 2px 8px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;"><span style="color:#fff;font-size:10px;font-weight:900;letter-spacing:-0.5px;font-family:Arial,sans-serif;">SOS</span></div>',
+  iconSize: [40,40], iconAnchor: [20,20], className: ''
+});
+const startIcon = L.divIcon({
+  html: '<div style="width:28px;height:28px;border-radius:50%;background:#00c851;border:3px solid #fff;box-shadow:0 0 0 3px rgba(0,200,81,0.4),0 2px 6px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><span style="color:#fff;font-size:9px;font-weight:900;font-family:Arial,sans-serif;">GO</span></div>',
+  iconSize: [28,28], iconAnchor: [14,14], className: ''
+});
+const endIcon = L.divIcon({
+  html: '<div style="width:28px;height:28px;border-radius:50%;background:#ff8c3b;border:3px solid #fff;box-shadow:0 0 0 3px rgba(255,140,59,0.4),0 2px 6px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><span style="color:#fff;font-size:9px;font-weight:900;font-family:Arial,sans-serif;">END</span></div>',
+  iconSize: [28,28], iconAnchor: [14,14], className: ''
+});
+
+// ── State ──────────────────────────────────────────────────────────────────
+let liveMarker     = null;
+let startMarker    = null;
+let endMarker      = null;
+let accuracyCircle = null;
+let pathPolyline   = null;
+let arrowDecorator = null;
+let currentLatLng  = null;
+let lastUpdatedAt  = null;
+let pathBounds     = null;
+let startedAt      = null;
+let pathCount      = 0;
+let sessionUrl     = window.location.href;
+// BUG FIX: track whether first location has been received so we only
+// auto-centre once — prevents the viewer's own GPS hijacking the map view.
+let firstLocationReceived = false;
+let userHasPanned = false;
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function haversine(a, b) {
+  const R = 6371000;
+  const φ1 = a[0]*Math.PI/180, φ2 = b[0]*Math.PI/180;
+  const dφ = (b[0]-a[0])*Math.PI/180, dλ = (b[1]-a[1])*Math.PI/180;
+  const s = Math.sin(dφ/2)*Math.sin(dφ/2)+Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)*Math.sin(dλ/2);
+  return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+}
+function totalDistance(coords) {
+  let d=0; for(let i=1;i<coords.length;i++) d+=haversine(coords[i-1],coords[i]); return d;
+}
+function fmtDist(m) { return m<1000?Math.round(m)+' m':(m/1000).toFixed(2)+' km'; }
+
+function timeSince(iso) {
+  if (!iso) return '–';
+  const diff = Math.floor((Date.now()-new Date(iso).getTime())/1000);
+  if (diff<5)    return 'just now';
+  if (diff<60)   return diff+'s ago';
+  if (diff<3600) return Math.floor(diff/60)+'m ago';
+  return Math.floor(diff/3600)+'h ago';
+}
+
+// FIX #2 — expiry label shows hours correctly
+function expiryLabel(isoExpires) {
+  if (!isoExpires) return '–';
+  const mins = Math.round((new Date(isoExpires)-Date.now())/60000);
+  if (mins<=0) return 'Expiring…';
+  if (mins>=60) return Math.floor(mins/60)+'h '+(mins%60)+'m left';
+  return mins+'m left';
+}
+
+function elapsedLabel() {
+  if (!startedAt) return '–';
+  const mins = Math.floor((Date.now()-new Date(startedAt).getTime())/60000);
+  if (mins<60) return mins+'m';
+  return Math.floor(mins/60)+'h '+(mins%60)+'m';
+}
+
+function avatarInitials(name) {
+  if (!name) return 'CA';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length>=2) return (parts[0][0]+parts[1][0]).toUpperCase();
+  return name[0].toUpperCase();
+}
+
+function setStatus(text, cls) {
+  const el=document.getElementById('bar-status');
+  el.textContent=text; el.className=cls||'';
+}
+function setDot(active) {
+  document.getElementById('sos-dot').className=active?'':'inactive';
+}
+
+function showSnackbar(msg) {
+  const el=document.getElementById('snackbar');
+  el.textContent=msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),2500);
+}
+
+function showOverlay(title, msg) {
+  document.getElementById('overlay-title').textContent=title;
+  document.getElementById('overlay-msg').textContent=msg;
+  document.getElementById('overlay').classList.add('show');
+  clearInterval(updatedInterval);
+}
+
+// ── Accuracy colour helper ─────────────────────────────────────────────────
+function accuracyClass(acc) {
+  if (acc<=0) return '';
+  if (acc<=15) return 'green';
+  if (acc<=30) return '';
+  return 'amber';
+}
+
+// ── Points colour helper ───────────────────────────────────────────────────
+function pointsClass(n) {
+  if (n>=900) return 'red';
+  if (n>=700) return 'amber';
+  return '';
+}
+
+// ── Clock interval (FIX #3 — declared before use) ─────────────────────────
+const updatedInterval = setInterval(()=>{
+  if (lastUpdatedAt)
+    document.getElementById('user-sub').textContent='Updated '+timeSince(lastUpdatedAt);
+  document.getElementById('elapsed-val').textContent=elapsedLabel();
+}, 10000);
+
+// ── Detect manual pan — stop auto-following when user drags map ───────────
+map.on('dragstart', () => { userHasPanned = true; });
+
+// ── Fit-path button ────────────────────────────────────────────────────────
+document.getElementById('fit-btn').addEventListener('click',()=>{
+  if (pathBounds&&pathBounds.isValid()) map.fitBounds(pathBounds,{padding:[60,60]});
+  else if (currentLatLng) map.setView(currentLatLng,16);
+  // Re-enable auto-follow after user explicitly fits path
+  userHasPanned = false;
+});
+
+// ── Share button ───────────────────────────────────────────────────────────
+document.getElementById('share-btn').addEventListener('click',()=>{
+  if (navigator.share) {
+    navigator.share({title:'CrashAid Live Tracking',url:sessionUrl})
+      .catch(()=>copyFallback());
+  } else { copyFallback(); }
+});
+function copyFallback() {
+  navigator.clipboard.writeText(sessionUrl).then(()=>showSnackbar('Link copied!'));
+}
+
+// ── Copy coords button ─────────────────────────────────────────────────────
+document.getElementById('copy-btn').addEventListener('click',()=>{
+  const coords=document.getElementById('ic-coords').textContent;
+  if (coords&&coords!=='–') {
+    navigator.clipboard.writeText(coords).then(()=>showSnackbar('Coordinates copied!'));
+  }
+});
+
+// ── Draw path ──────────────────────────────────────────────────────────────
+function drawPath(coords, isActive) {
+  if (!coords||coords.length===0) return;
+  pathBounds=L.latLngBounds(coords);
+  pathCount=coords.length;
+
+  if (!pathPolyline) {
+    pathPolyline=L.polyline(coords,{color:'#ff3b3b',weight:4,opacity:0.75}).addTo(map);
+  } else { pathPolyline.setLatLngs(coords); }
+
+  // Direction arrows
+  if (arrowDecorator){map.removeLayer(arrowDecorator);arrowDecorator=null;}
+  if (coords.length>=2) {
+    const grp=L.layerGroup();
+    const step=Math.max(1,Math.floor(coords.length/8));
+    for(let i=step;i<coords.length;i+=step){
+      const from=coords[i-1],to=coords[i];
+      const angle=Math.atan2(to[1]-from[1],to[0]-from[0])*180/Math.PI;
+      const mid=[(from[0]+to[0])/2,(from[1]+to[1])/2];
+      const icon=L.divIcon({
+        html:`<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid rgba(255,59,59,0.85);transform:rotate(${angle}deg);transform-origin:center;"></div>`,
+        iconSize:[12,12],iconAnchor:[6,6],className:''
+      });
+      L.marker(mid,{icon,interactive:false,zIndexOffset:-100}).addTo(grp);
+    }
+    arrowDecorator=grp; arrowDecorator.addTo(map);
+  }
+
+  // Start marker
+  if (!startMarker) {
+    startMarker=L.marker(coords[0],{icon:startIcon,zIndexOffset:200}).addTo(map)
+      .bindTooltip('Start',{permanent:false,direction:'top'});
+  } else { startMarker.setLatLng(coords[0]); }
+
+  // End marker (inactive sessions)
+  const last=coords[coords.length-1];
+  if (!isActive) {
+    if (!endMarker) {
+      endMarker=L.marker(last,{icon:endIcon,zIndexOffset:200}).addTo(map)
+        .bindTooltip('Last known position',{permanent:false,direction:'top'});
+    } else { endMarker.setLatLng(last); }
+  } else {
+    if (endMarker){map.removeLayer(endMarker);endMarker=null;}
+  }
+
+  // Distance + elapsed pills
+  const dist=totalDistance(coords);
+  if (coords.length>1) {
+    document.getElementById('dist-val').textContent=fmtDist(dist);
+    document.getElementById('dist-pill').classList.add('show');
+    document.getElementById('elapsed-pill').classList.add('show');
+  }
+  document.getElementById('legend').classList.add('show');
+
+  // Points metric
+  const pEl=document.getElementById('ic-points');
+  pEl.textContent=pathCount+'/1000';
+  pEl.className='metric-value '+pointsClass(pathCount);
+}
+
+// ── Live marker ────────────────────────────────────────────────────────────
+function updateLiveMarker(lat, lng, accuracy) {
+  currentLatLng=[lat,lng];
+  if (!liveMarker) {
+    liveMarker=L.marker(currentLatLng,{icon:sosIcon,zIndexOffset:500}).addTo(map);
+  } else { liveMarker.setLatLng(currentLatLng); }
+  if (accuracy>0) {
+    if (!accuracyCircle) {
+      accuracyCircle=L.circle(currentLatLng,{radius:accuracy,color:'#ff3b3b',fillColor:'#ff3b3b',fillOpacity:0.08,weight:1}).addTo(map);
+    } else { accuracyCircle.setLatLng(currentLatLng).setRadius(accuracy); }
+  }
+  // Only auto-centre on first update, or if user hasn't panned away.
+  if (!firstLocationReceived) {
+    map.setView(currentLatLng, 16);
+    firstLocationReceived = true;
+  } else if (!userHasPanned) {
+    map.setView(currentLatLng, map.getZoom()<15?16:map.getZoom());
+  }
+}
+
+// ── Parse path ─────────────────────────────────────────────────────────────
+function parsePath(raw) {
+  if (!raw) return [];
+  const entries=Array.isArray(raw)?raw:Object.values(raw);
+  return entries
+    .filter(p=>p&&p.lat!=null&&p.lng!=null)
+    .filter(p=>!(p.lat===0&&p.lng===0))
+    .map(p=>[p.lat,p.lng]);
+}
+
+// ── Session ────────────────────────────────────────────────────────────────
+const params=new URLSearchParams(window.location.search);
+const sessionId=params.get('id');
+
+if (!sessionId) {
+  showOverlay('No session found','This tracking link is missing a session ID. Please ask the person to share a new link.');
+} else {
+  const ref=firebase.database().ref('live_tracking/'+sessionId);
+
+  ref.on('value',(snap)=>{
+    const data=snap.val();
+    if (!data) {
+      setStatus('Not found','offline'); setDot(false);
+      showOverlay('Session not found','This tracking session does not exist or has been deleted.');
+      return;
+    }
+
+    // Username + avatar
+    if (data.username) {
+      document.getElementById('bar-name').textContent='🚨 '+data.username;
+      document.getElementById('user-name').textContent=data.username;
+      document.getElementById('avatar').textContent=avatarInitials(data.username);
+    }
+
+    if (data.started_at) startedAt=data.started_at;
+
+    const pathCoords=parsePath(data.path);
+
+    // ── INACTIVE / EXPIRED ─────────────────────────────────────────────────
+    const isExpired=data.expires_at&&new Date(data.expires_at)<Date.now();
+    if (!data.active||isExpired) {
+      clearInterval(updatedInterval);
+      setStatus('Tracking ended','expired'); setDot(false);
+      document.getElementById('expiry-badge').textContent='Ended';
+      document.getElementById('expiry-badge').className='orange';
+      document.getElementById('ic-accuracy').textContent='–';
+      document.getElementById('ic-accuracy').className='metric-value';
+      document.getElementById('ic-speed').textContent='–';
+      document.getElementById('user-sub').textContent='Session ended';
+      lastUpdatedAt=null;
+
+      const lastCoords=pathCoords.length>0
+        ?pathCoords[pathCoords.length-1]
+        :(data.lat&&data.lng&&!(data.lat===0&&data.lng===0)?[data.lat,data.lng]:null);
+
+      if (lastCoords) {
+        document.getElementById('ic-coords').textContent=
+          lastCoords[0].toFixed(5)+', '+lastCoords[1].toFixed(5);
+        if (pathCoords.length>0) { drawPath(pathCoords,false); currentLatLng=lastCoords; map.setView(lastCoords,15); }
+        else { updateLiveMarker(lastCoords[0],lastCoords[1],data.accuracy||0); }
+        const btn=document.getElementById('open-maps-btn');
+        btn.disabled=false;
+        btn.onclick=()=>window.open('https://maps.google.com/?q='+lastCoords[0]+','+lastCoords[1],'_blank');
+      }
+      return;
+    }
+
+    // ── WAITING FOR GPS ────────────────────────────────────────────────────
+    if (!data.lat||!data.lng||(data.lat===0&&data.lng===0)) {
+      setStatus('Waiting for GPS…','waiting'); setDot(true); return;
+    }
+
+    // ── LIVE ───────────────────────────────────────────────────────────────
+    setStatus('● LIVE',''); setDot(true);
+    lastUpdatedAt=data.updated_at;
+
+    document.getElementById('ic-coords').textContent=
+      data.lat.toFixed(5)+', '+data.lng.toFixed(5);
+
+    // Accuracy with colour
+    const accEl=document.getElementById('ic-accuracy');
+    accEl.textContent=data.accuracy?'±'+Math.round(data.accuracy)+' m':'–';
+    accEl.className='metric-value '+accuracyClass(data.accuracy||0);
+
+    // Speed — clamp GPS noise below 0.8 m/s (~3 km/h)
+    const speedEl=document.getElementById('ic-speed');
+    if (data.speed != null && data.speed > 0.8) {
+      const kmh = Math.round(data.speed * 3.6);
+      speedEl.textContent = kmh + ' km/h';
+      speedEl.className = 'metric-value';
+    } else {
+      speedEl.textContent = '0 km/h';
+      speedEl.className = 'metric-value';
+    }
+
+    // Updated sub
+    document.getElementById('user-sub').textContent='Updated '+timeSince(data.updated_at);
+
+    // FIX #2 — Expiry with hours
+    const expBadge=document.getElementById('expiry-badge');
+    expBadge.textContent=expiryLabel(data.expires_at);
+    expBadge.className=expBadge.textContent==='Expiring…'?'orange':'';
+
+    const btn=document.getElementById('open-maps-btn');
+    btn.disabled=false;
+    btn.onclick=()=>window.open('https://maps.google.com/?q='+data.lat+','+data.lng,'_blank');
+
+    if (pathCoords.length>0) drawPath(pathCoords,true);
+    if (data.path_truncated) document.getElementById('trunc-notice').classList.add('show');
+
+    updateLiveMarker(data.lat,data.lng,data.accuracy||0);
+
+  },(err)=>{
+    setStatus('Connection error','offline'); setDot(false);
+    console.error('Firebase error:',err);
+  });
+}
+</script>
+</body>
+</html>

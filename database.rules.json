@@ -1,0 +1,10 @@
+{
+  "rules": {
+    "live_tracking": {
+      "$sessionId": {
+        ".read": true,
+        ".write": "auth != null && $sessionId.beginsWith(auth.uid + '_')"
+      }
+    }
+  }
+}
