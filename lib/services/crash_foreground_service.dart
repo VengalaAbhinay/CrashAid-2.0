@@ -22,13 +22,12 @@ class CrashTaskHandler extends TaskHandler {
   static const int _requiredHits = 2;
   static const double _minSpeedMs = 5.0 / 3.6;
 
-  // ── Fall detection (Challenge 06 — Senior Safety) ──────────────────────
   static const double _fallThreshold = 18.0;
   bool _fallDetected = false;
   int _stillnessCount = 0;
   static const int _requiredStillnessSamples = 25; // ~5s at 5Hz
 
-  // ── Shake to SOS (Challenge 06 — Senior Safety) ────────────────────────
+
   int _shakeCount = 0;
   DateTime? _firstShakeTime;
   static const int _requiredShakes = 3;
